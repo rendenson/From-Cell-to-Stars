@@ -1,0 +1,61 @@
+plugins {
+    id 'fabric-loom' version "${loom_version}"
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    // only used by run-shaders.bat (Sodium + Iris for shader packs)
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = "Modrinth"
+                url = "https://api.modrinth.com/maven"
+            }
+        }
+        filter {
+            includeGroup "maven.modrinth"
+        }
+    }
+    mavenCentral()
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+    // run-shaders.bat starts the game with Sodium + Iris, so shader packs work (not part of the mod itself)
+    if (project.findProperty("shaders") == "true") {
+        modLocalRuntime "maven.modrinth:sodium:mc1.21.1-0.6.0-fabric"
+        modLocalRuntime "maven.modrinth:iris:1.8.0+1.21.1-fabric"
+        // libraries Iris needs (bundled inside the normal Iris download, but not in the developer version)
+        runtimeOnly "org.anarres:jcpp:1.4.14"
+        runtimeOnly "io.github.douira:glsl-transformer:2.0.1"
+        runtimeOnly "org.antlr:antlr4-runtime:4.13.1"
+    }
+}
+
+processResources {
+    inputs.property "version", project.version
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version
+    }
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.release = 21
+    it.options.encoding = 'UTF-8'
+}

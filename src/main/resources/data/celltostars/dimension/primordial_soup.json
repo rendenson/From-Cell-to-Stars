@@ -1,0 +1,26 @@
+{
+  "type": "celltostars:primordial_soup",
+  "generator": {
+    "type": "minecraft:flat",
+    "settings": {
+      "biome": "celltostars:primordial_soup",
+      "lakes": false,
+      "features": false,
+      "layers": [
+        {
+          "block": "minecraft:bedrock",
+          "height": 1
+        },
+        {
+          "block": "minecraft:sand",
+          "height": 3
+        },
+        {
+          "block": "minecraft:water",
+          "height": 236
+        }
+      ],
+      "structure_overrides": []
+    }
+  }
+}

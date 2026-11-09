@@ -1,0 +1,28 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.celltostars.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "PufferfishMixin"
+  ],
+  "client": [
+    "CameraMixin",
+    "EntityMixin",
+    "FogRendererMixin",
+    "GuiMixin",
+    "KeyboardInputMixin",
+    "LivingEntityMixin",
+    "MinecraftMusicMixin",
+    "PlayerRendererMixin",
+    "PrimaryLevelDataMixin",
+    "ScreenEffectRendererMixin",
+    "SoundEngineMixin",
+    "SoundManagerMixin",
+    "ToastComponentMixin",
+    "WorldOpenFlowsMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

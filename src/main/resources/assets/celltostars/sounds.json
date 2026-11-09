@@ -1,0 +1,20 @@
+{
+  "music.editor": {
+    "sounds": [
+      {
+        "name": "celltostars:music/editor",
+        "stream": true,
+        "volume": 0.4
+      }
+    ]
+  },
+  "music.soup": {
+    "sounds": [
+      {
+        "name": "celltostars:music/soup",
+        "stream": true,
+        "volume": 0.4
+      }
+    ]
+  }
+}
