@@ -57,10 +57,11 @@ public class CellCreature extends PathfinderMob {
     private Vec3 wanderDir = Vec3.ZERO;
     private int wanderTimer = 0;
     private int scaredTimer = 0;
-    private int angryTimer = 0;
+    private int angryTimer = 0;      // fights back for a while after being attacked (or a pack mate was)
     private int fleeTicks = 0;       // keeps running for a moment once spooked (no back-and-forth)
+    private CellCreature preyTarget = null; // shared with pack mates of my species
     /** AI cells swim at this share of a player cell's speed with the same number of flagella. */
-    private static final double AI_SPEED = 0.8;      // omnivores fight back for a while after being attacked
+    private static final double AI_SPEED = 0.8;
     private int attackCooldown = 0;
     private int stunTicks = 0;       // just got hit: flung back, can't steer
     private int chaseTicks = 0;      // hunters give up a chase after a while...
@@ -188,6 +189,7 @@ public class CellCreature extends PathfinderMob {
             if (source.getEntity() instanceof Player) {
                 if (species().temperament == Species.Temperament.NEUTRAL) angryTimer = 120; // fights back
                 else scaredTimer = 60;                                                   // runs away for 3 seconds
+                alertPack();
             }
             // flinch: a short jerk away from whoever hit me
             Vec3 away = new Vec3(getX() - source.getEntity().getX(), 0, getZ() - source.getEntity().getZ());
@@ -313,7 +315,10 @@ public class CellCreature extends PathfinderMob {
             case HUNTER -> {
                 boolean weak = getHealth() < getMaxHealth() * 0.3f;
                 boolean afraid = weak || scaredTimer > 0 || (playerDangerous && playerBigger);
-                if (afraid && playerDist < 2.0 * sense) {
+                if (angryTimer > 0 && !playerBigger) {
+                    goal = player.position(); // you hurt one of my pack
+                    goalSpeed = 0.9;
+                } else if (afraid && playerDist < 2.0 * sense) {
                     danger = player.position();
                     chaseTicks = 0;
                 } else if (!playerBigger && restTicks == 0 && playerDist < 4 * sense) {
@@ -429,7 +434,8 @@ public class CellCreature extends PathfinderMob {
         if (attackCooldown == 0 && wantsToBite) {
             // predators eat smaller cells whole and bite peers
             for (CellCreature prey : level.getEntitiesOfClass(CellCreature.class, getBoundingBox().inflate(getBbWidth()),
-                    c -> c != this && c.isAlive() && c.cellTier() <= cellTier() && Combat.touches(front, c, radius))) {
+                    c -> c != this && c.isAlive() && c.species() != species // never my own kind
+                            && c.cellTier() <= cellTier() && Combat.touches(front, c, radius))) {
                 if (species.look.diet() == Diet.CARNIVORE && prey.species().look.diet() == Diet.CARNIVORE
                         && prey.cellTier() == cellTier() && Combat.headOn(this, prey)) {
                     prey.bounceOff(this); // two equal jaws: clack, nobody gets bitten
@@ -479,10 +485,37 @@ public class CellCreature extends PathfinderMob {
         return foods.stream().min(Comparator.comparingDouble(this::distanceToSqr)).map(Entity::position).orElse(null);
     }
 
+    /** Hunters of one species hunt together: if a pack mate nearby is after something, I go for it too. */
     private CellCreature nearestPrey(ServerLevel level, double range) {
-        return level.getEntitiesOfClass(CellCreature.class, getBoundingBox().inflate(range, 1, range),
-                        c -> c != this && c.isAlive() && c.species() != Species.KIN && c.cellTier() < cellTier())
-                .stream().min(Comparator.comparingDouble(this::distanceToSqr)).orElse(null);
+        if (preyTarget != null && (!preyTarget.isAlive() || distanceTo(preyTarget) > range)) preyTarget = null;
+        if (preyTarget == null) {
+            for (CellCreature mate : level.getEntitiesOfClass(CellCreature.class, getBoundingBox().inflate(range, 1, range),
+                    c -> c != this && c.species() == species() && c.preyTarget != null && c.preyTarget.isAlive())) {
+                preyTarget = mate.preyTarget;
+                break;
+            }
+        }
+        if (preyTarget == null) {
+            preyTarget = level.getEntitiesOfClass(CellCreature.class, getBoundingBox().inflate(range, 1, range),
+                            c -> c != this && c.isAlive() && c.species() != Species.KIN && c.species() != species()
+                                    && c.cellTier() < cellTier())
+                    .stream().min(Comparator.comparingDouble(this::distanceToSqr)).orElse(null);
+        }
+        return preyTarget;
+    }
+
+    /** You hurt one of us: meat eaters and omnivores of my species come at you, grazers scatter. */
+    private void alertPack() {
+        if (!(level() instanceof ServerLevel level)) return;
+        double range = 4 * getScale() / 0.3;
+        for (CellCreature mate : level.getEntitiesOfClass(CellCreature.class, getBoundingBox().inflate(range, 1, range),
+                c -> c != this && c.isAlive() && c.species() == species())) {
+            switch (species().temperament) {
+                case HUNTER, NEUTRAL, DRIFTER -> mate.angryTimer = 120;
+                case PASSIVE, SKITTISH -> mate.fleeTicks = 40;
+                default -> { }
+            }
+        }
     }
 
     @Override

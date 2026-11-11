@@ -118,6 +118,7 @@ public class CellToStarsClient implements ClientModInitializer {
             }
             player.setSprinting(false);
             applySwimSpeed(player);
+            CellCollisions.push(player); // can't swim through cells bigger than you
         }
     }
 }
