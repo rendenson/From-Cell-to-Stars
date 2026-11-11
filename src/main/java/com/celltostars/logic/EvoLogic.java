@@ -58,8 +58,10 @@ public final class EvoLogic {
     private static final double PLANE_Y = CellToStars.CELL_PLANE_Y;
 
     private static final double FOOD_RADIUS = 12;
-    private static final int MAX_FOOD_NEAR_PLAYER = 30;
-    private static final int MAX_CREATURES_NEAR_PLAYER = 10;
+    private static final int MAX_PLANTS_NEAR_PLAYER = 24;
+    /** About how many AI cells swim on your layer around you, and giants in the deep below. */
+    private static final int CELLS_ON_LAYER = 14;
+    private static final int GIANTS_BELOW = 3;
     private static final int MAX_BUSHES_NEAR_PLAYER = 4;
     /** Players reach level 5; levels 6 and 7 exist only as giants of the deep. */
 
@@ -298,7 +300,7 @@ public final class EvoLogic {
                 spawnFood(level, player);
                 spawnBushes(level, player);
             }
-            if (time % 60 == 0) {
+            if (time % 20 == 0) {
                 spawnCreatures(level, player);
             }
             touchDamage(level, player, data); // every tick, so a short touch is never missed
@@ -367,12 +369,21 @@ public final class EvoLogic {
     private static void spawnFood(ServerLevel level, ServerPlayer player) {
         double radius = FOOD_RADIUS * sizeFactor(player);
         AABB area = player.getBoundingBox().inflate(radius + 4, 2, radius + 4);
-        int count = level.getEntitiesOfClass(FoodParticle.class, area).size();
+        List<FoodParticle> food = level.getEntitiesOfClass(FoodParticle.class, area);
+        int plants = (int) food.stream().filter(f -> !f.isMeat()).count();
+        int meat = food.size() - plants;
+        // plants and meat are counted apart: a meat eater leaves the plants alone, and they must not block new meat.
+        // Like in Spore, loose meat is common at first and gets rarer as you grow (8 pieces around you -> 4)
+        int maxMeat = Math.max(4, 9 - get(player).level());
         RandomSource random = level.getRandom();
-        for (int i = count; i < MAX_FOOD_NEAR_PLAYER && i < count + 4; i++) {
+        float k = (float) sizeFactor(player);
+        for (int i = 0; i < 4; i++) {
+            boolean makeMeat = meat < maxMeat && (plants >= MAX_PLANTS_NEAR_PLAYER || random.nextFloat() < 0.3f);
+            if (!makeMeat && plants >= MAX_PLANTS_NEAR_PLAYER) break;
             double x = player.getX() + (random.nextDouble() * 2 - 1) * radius;
             double z = player.getZ() + (random.nextDouble() * 2 - 1) * radius;
-            spawnFoodAt(level, x, z, random.nextFloat() < 0.2f, (float) sizeFactor(player));
+            spawnFoodAt(level, x, z, makeMeat, k);
+            if (makeMeat) meat++; else plants++;
         }
     }
 
@@ -451,13 +462,27 @@ public final class EvoLogic {
         double k = sizeFactor(player);
         AABB area = player.getBoundingBox().inflate(22 * k, 10 * k, 22 * k);
         List<CellCreature> near = level.getEntitiesOfClass(CellCreature.class, area);
-        if (near.size() >= MAX_CREATURES_NEAR_PLAYER) return;
+        int playerTier = get(player).tier();
+        int giants = (int) near.stream().filter(c -> c.cellTier() - playerTier >= 3).count();
+        int onLayer = near.size() - giants;
+        boolean needGiant = giants < GIANTS_BELOW;
+        boolean needCell = onLayer < CELLS_ON_LAYER;
+        if (!needGiant && !needCell) return;
 
         RandomSource random = level.getRandom();
-        int playerTier = get(player).tier();
+        // fill up quickly when the area is empty (new world, after growing), then keep it topped up
+        int toSpawn = needCell && onLayer < CELLS_ON_LAYER / 2 ? 2 : 1;
+        for (int n = 0; n < toSpawn; n++) {
+            spawnOneCreature(level, player, near, playerTier,
+                    needGiant && (!needCell || random.nextFloat() < 0.25f), k, random);
+        }
+    }
+
+    private static void spawnOneCreature(ServerLevel level, ServerPlayer player, List<CellCreature> near, int playerTier,
+                                         boolean wantGiant, double k, RandomSource random) {
         // now and then one of your own kind (friendly), otherwise a species that fits your size
-        boolean kin = random.nextFloat() < 0.08f && near.stream().filter(c -> c.species() == Species.KIN).count() < 2;
-        Species species = kin ? Species.KIN : pickSpecies(random, playerTier, random.nextFloat() < 0.12f, near);
+        boolean kin = !wantGiant && random.nextFloat() < 0.06f && near.stream().filter(c -> c.species() == Species.KIN).count() < 2;
+        Species species = kin ? Species.KIN : pickSpecies(random, playerTier, wantGiant, near);
         if (species == null) return;
         int cellTier = kin ? playerTier : species.tier;
         boolean giant = cellTier - playerTier >= 3;

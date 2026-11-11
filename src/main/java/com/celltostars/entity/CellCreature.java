@@ -53,7 +53,10 @@ public class CellCreature extends PathfinderMob {
     private Vec3 wanderDir = Vec3.ZERO;
     private int wanderTimer = 0;
     private int scaredTimer = 0;
-    private int angryTimer = 0;      // omnivores fight back for a while after being attacked
+    private int angryTimer = 0;
+    private int fleeTicks = 0;       // keeps running for a moment once spooked (no back-and-forth)
+    /** AI cells swim at this share of a player cell's speed with the same number of flagella. */
+    private static final double AI_SPEED = 0.8;      // omnivores fight back for a while after being attacked
     private int attackCooldown = 0;
     private int stunTicks = 0;       // just got hit: flung back, can't steer
     private int chaseTicks = 0;      // hunters give up a chase after a while...
@@ -208,7 +211,7 @@ public class CellCreature extends PathfinderMob {
         }
         boolean background = gap >= 3;
         double playerK = player.getScale() / 0.3; // the "screen size": speeds are measured in it
-        if (distanceTo(player) > 60 * Math.max(myK, playerK)) {
+        if (distanceTo(player) > (background ? 45 : 32) * Math.max(myK, playerK)) { // left far behind: gone, a new one spawns ahead
             discard();
             return;
         }
@@ -242,14 +245,21 @@ public class CellCreature extends PathfinderMob {
         }
 
         // same speed rule as the player, measured in the player's screen size (NOT our own size)
-        double speed = CellSpeed.blocksPerTick(species.speedPoints, playerK);
+        // AI cells swim a bit slower than a player cell with the same parts: with a couple of flagella you can
+        // catch the cells of your layer, without any you can only catch the slow ones (like in Spore)
+        double speed = CellSpeed.blocksPerTick(species.speedPoints, playerK) * AI_SPEED;
         if (background) {
             wander(speed * 0.4); // giants just cruise slowly, they don't care about something so small
             return;
         }
 
         double playerDist = distanceTo(player);
-        double sense = playerK; // how far it notices you: about the edge of your screen
+        double sense = playerK; // one "cell length" of yours on screen, roughly
+        // is the player swimming towards me? (cells react to something coming at them, not to everything they see)
+        Vec3 playerMove = new Vec3(player.getX() - player.xo, 0, player.getZ() - player.zo);
+        Vec3 toMe = new Vec3(getX() - player.getX(), 0, getZ() - player.getZ());
+        boolean playerComing = playerMove.lengthSqr() > 1.0e-6 && playerMove.dot(toMe) > 0.5 * playerMove.length() * toMe.length();
+        if (fleeTicks > 0) fleeTicks--;
         Combat.Relation meToPlayer = Combat.Relation.of(cellTier(), playerData.tier());
         // can the player hurt me? (meat eaters, sucking tubes and spikes do; harmless herbivores don't)
         boolean playerDangerous = playerData.diet() != Diet.HERBIVORE || playerData.has(Part.SPIKE);
@@ -263,20 +273,23 @@ public class CellCreature extends PathfinderMob {
 
         switch (species.temperament) {
             case PASSIVE -> {
-                boolean afraid = scaredTimer > 0 || (playerDangerous && !iAmBig);
-                if (afraid && playerDist < 2.2 * sense) danger = player.position();
+                // calm grazers: run only when hurt, or when something dangerous comes right at them
+                if (scaredTimer > 0 || (playerDangerous && !iAmBig && playerComing && playerDist < 1.3 * sense)) fleeTicks = 30;
+                if (fleeTicks > 0) danger = player.position();
                 else goal = nearestFood(level, false, 4 * playerK);
                 goalSpeed = 0.6;
             }
             case SKITTISH -> {
-                if (playerDist < 2.5 * sense && (scaredTimer > 0 || !iAmBig)) danger = player.position();
+                // nervous: anything coming closer makes them dart away
+                if (scaredTimer > 0 || (!iAmBig && playerDist < 1.8 * sense && (playerComing || playerDist < sense))) fleeTicks = 30;
+                if (fleeTicks > 0) danger = player.position();
                 else goal = nearestFood(level, false, 4 * playerK);
                 goalSpeed = 0.6;
             }
             case HUNTER -> {
                 boolean weak = getHealth() < getMaxHealth() * 0.3f;
                 boolean afraid = weak || scaredTimer > 0 || (playerDangerous && playerBigger);
-                if (afraid && playerDist < 3.5 * sense) {
+                if (afraid && playerDist < 2.0 * sense) {
                     danger = player.position();
                     chaseTicks = 0;
                 } else if (!playerBigger && restTicks == 0 && playerDist < 4 * sense) {
@@ -300,7 +313,7 @@ public class CellCreature extends PathfinderMob {
             case NEUTRAL -> {
                 if (angryTimer > 0 && !playerBigger) {
                     goal = player.position(); // you started it
-                } else if ((scaredTimer > 0 || (playerDangerous && playerBigger)) && playerDist < 2.2 * sense) {
+                } else if (scaredTimer > 0 || (playerDangerous && playerBigger && playerComing && playerDist < 1.3 * sense)) {
                     danger = player.position();
                 } else {
                     goal = nearestFood(level, false, 4 * playerK);
