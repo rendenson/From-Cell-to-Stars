@@ -1,5 +1,5 @@
-# Finds a Java that Gradle 8.14 can run on (17..24) and prints its folder.
-# Java 8 (too old) and Java 25+ (too new for this Gradle) are skipped.
+# Finds a Java that can build the mod (21..24) and prints its folder.
+# Minecraft 1.21.1 needs Gradle itself to run on Java 21+; Gradle 8.14 can't run on Java 25+.
 # If there is none, downloads a portable Java 21 into .\jdk (only once, ~200 MB).
 $ProgressPreference = 'SilentlyContinue'
 $local = Join-Path $PSScriptRoot 'jdk'
@@ -17,7 +17,7 @@ foreach ($c in $candidates) {
     $m = Select-String -Path $release -Pattern '^JAVA_VERSION="(\d+)' | Select-Object -First 1
     if (-not $m) { continue }
     $v = [int]$m.Matches[0].Groups[1].Value
-    if ($v -ge 17 -and $v -le 24) { Write-Output $c; exit 0 }
+    if ($v -ge 21 -and $v -le 24) { Write-Output $c; exit 0 }
 }
 
 Write-Host "No suitable Java found - downloading Java 21 (about 200 MB, only the first time)..."

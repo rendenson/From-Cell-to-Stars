@@ -19,7 +19,7 @@ Built together with Claude (Anthropic's AI) - I design, playtest and steer, Clau
 
 ## Running it
 
-Windows: double-click `run.bat`. It finds a suitable Java (17-24) or downloads Java 21 into `jdk/`
+Windows: double-click `run.bat`. It finds a suitable Java (21-24) or downloads Java 21 into `jdk/`
 the first time, builds the mod and starts a test Minecraft. `run-shaders.bat` does the same with
 Sodium + Iris for shader packs (put packs into `run/shaderpacks`). `update.bat` pulls the latest code first.
 
