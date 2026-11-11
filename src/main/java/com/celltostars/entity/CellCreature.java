@@ -16,6 +16,10 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.core.particles.ParticleTypes;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
@@ -120,6 +124,25 @@ public class CellCreature extends PathfinderMob {
         return true;
     }
 
+    private int bounceCooldown = 0;
+
+    /**
+     * Two jaws met head-on: a "clack", I'm pushed back and so is the other cell. Returns false if we just
+     * bounced (so it isn't repeated every tick).
+     */
+    public boolean bounceOff(LivingEntity other) {
+        if (bounceCooldown > 0 || !(level() instanceof ServerLevel server)) return false;
+        bounceCooldown = 10;
+        flingFrom(other, 0.25);
+        stunTicks = 6;
+        other.knockback(0.6, getX() - other.getX(), getZ() - other.getZ());
+        other.hurtMarked = true;
+        server.playSound(null, blockPosition(), SoundEvents.SHIELD_BLOCK, SoundSource.HOSTILE, 0.7f, 1.6f);
+        Vec3 mid = position().add(other.position()).scale(0.5);
+        server.sendParticles(ParticleTypes.CRIT, mid.x, getY() + 0.1 * getScale() / 0.3, mid.z, 5, 0.05, 0.02, 0.05, 0.1);
+        return true;
+    }
+
     /** Pushes me away from the given point (a flinch) and stuns me for a moment. */
     private void flingFrom(Entity from, double strength) {
         Vec3 away = new Vec3(getX() - from.getX(), 0, getZ() - from.getZ());
@@ -140,6 +163,7 @@ public class CellCreature extends PathfinderMob {
     public void tick() {
         super.tick();
         if (latchCooldown > 0) latchCooldown--;
+        if (bounceCooldown > 0) bounceCooldown--;
     }
 
     @Override
@@ -384,15 +408,20 @@ public class CellCreature extends PathfinderMob {
         if (attackCooldown == 0 && (wantsToBite || species.hasSpikes())) {
             for (ServerPlayer player : level.getEntitiesOfClass(ServerPlayer.class, getBoundingBox().inflate(getBbWidth()),
                     p -> EvoLogic.isCell(p) && !EvoCycle.isInEgg(p) && Combat.touches(front, p, radius))) {
-                Combat.Relation rel = Combat.Relation.of(cellTier(), EvoLogic.get(player).tier());
+                EvoData victim = EvoLogic.get(player);
+                Combat.Relation rel = Combat.Relation.of(cellTier(), victim.tier());
+                // my jaws against your jaws, face to face: they clack and we bounce apart (only spikes still sting)
+                boolean jawsMeet = species.look.diet() == Diet.CARNIVORE && victim.diet() == Diet.CARNIVORE
+                        && rel != Combat.Relation.EPIC && Combat.headOn(this, player);
+                if (jawsMeet) bounceOff(player);
                 float share = 0;
-                if (wantsToBite && rel != Combat.Relation.PREY) share = Combat.aiHitShare(rel); // jaws don't bother with giants
+                if (wantsToBite && !jawsMeet && rel != Combat.Relation.PREY) share = Combat.aiHitShare(rel); // jaws don't bother with giants
                 if (species.hasSpikes()) share = Math.max(share, Combat.aiHitShare(rel));        // spikes always sting
                 if (share > 0 && player.hurt(level.damageSources().mobAttack(this), player.getMaxHealth() * share)) {
                     if (species.look.diet() == Diet.OMNIVORE && wantsToBite) {
                         EvoLogic.juice(level, player, this); // its proboscis drinks from you
-                        heal(2.0f);
                     }
+                    if (wantsToBite) heal(2.0f); // a bite is a meal
                     attackCooldown = 20;
                 }
             }
@@ -401,8 +430,16 @@ public class CellCreature extends PathfinderMob {
             // predators eat smaller cells whole and bite peers
             for (CellCreature prey : level.getEntitiesOfClass(CellCreature.class, getBoundingBox().inflate(getBbWidth()),
                     c -> c != this && c.isAlive() && c.cellTier() <= cellTier() && Combat.touches(front, c, radius))) {
+                if (species.look.diet() == Diet.CARNIVORE && prey.species().look.diet() == Diet.CARNIVORE
+                        && prey.cellTier() == cellTier() && Combat.headOn(this, prey)) {
+                    prey.bounceOff(this); // two equal jaws: clack, nobody gets bitten
+                    attackCooldown = 20;
+                    continue;
+                }
                 boolean peer = prey.cellTier() == cellTier();
-                prey.hurt(level.damageSources().mobAttack(this), prey.getMaxHealth() * (peer ? 0.5f : 1.0f));
+                if (prey.hurt(level.damageSources().mobAttack(this), prey.getMaxHealth() * (peer ? 0.5f : 1.0f))) {
+                    heal(prey.isAlive() ? 2.0f : 4.0f); // swallowing a whole cell fills it up more
+                }
                 attackCooldown = 20;
             }
         }
@@ -425,7 +462,7 @@ public class CellCreature extends PathfinderMob {
         for (FoodParticle food : level.getEntitiesOfClass(FoodParticle.class, body, Entity::isAlive)) {
             if (food.isMeat() ? eatsMeat : eatsPlants) {
                 food.discard();
-                heal(1.0f);
+                heal(2.0f); // like the player: a piece of food heals 1 of Spore's 6 HP
             }
         }
     }

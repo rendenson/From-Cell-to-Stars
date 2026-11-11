@@ -74,6 +74,26 @@ public final class Combat {
 
     // ---------------- where the front of a cell is ----------------
 
+    /**
+     * Are the two cells face to face - each one in front of the other's nose? Two jaws meeting like that
+     * clack together and bounce off (Spore): to bite another meat eater you have to get it from the side.
+     */
+    public static boolean headOn(LivingEntity a, LivingEntity b) {
+        float ya = a.getYRot() * Mth.DEG_TO_RAD;
+        float yb = b.getYRot() * Mth.DEG_TO_RAD;
+        double ax = -Mth.sin(ya), az = Mth.cos(ya);
+        double bx = -Mth.sin(yb), bz = Mth.cos(yb);
+        double dx = b.getX() - a.getX(), dz = b.getZ() - a.getZ();
+        double len = Math.sqrt(dx * dx + dz * dz);
+        if (len < 1.0e-4) return false;
+        dx /= len;
+        dz /= len;
+        boolean facing = ax * bx + az * bz < -0.5;         // looking at each other (within ~60 degrees)
+        boolean bInFront = ax * dx + az * dz > 0.6;        // b is in front of a's mouth
+        boolean aInFront = -(bx * dx + bz * dz) > 0.6;     // and a in front of b's mouth
+        return facing && bInFront && aInFront;
+    }
+
     /** The tip of the mouth / spikes, in front of the body (scaled with the cell). */
     public static Vec3 frontPoint(LivingEntity cell, double reachPerScale) {
         float yaw = cell.getYRot() * Mth.DEG_TO_RAD;

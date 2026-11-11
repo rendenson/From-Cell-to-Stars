@@ -594,7 +594,23 @@ public final class EvoLogic {
                 e -> e != player && e.isAlive() && !(e instanceof Player) && Combat.reaches(player, reach, thickness, e))) {
             if (target instanceof CellCreature cell && cell.species() == Species.KIN) continue; // your own kind
             Combat.Relation victim = relationOf(target, data.tier());
-            if (victim == Combat.Relation.EPIC) continue; // far too big to even scratch
+            if (victim == Combat.Relation.EPIC) {
+                // far too big: its skin is too tough to even scratch - a dull thud tells you so
+                if (target instanceof CellCreature && level.getGameTime() % 15 == 0) {
+                    level.playSound(null, target.blockPosition(), SoundEvents.SHIELD_BLOCK, SoundSource.PLAYERS, 0.5f, 0.6f);
+                    level.sendParticles(ParticleTypes.SMOKE, front.x, front.y, front.z, 3, 0.03, 0.01, 0.03, 0.0);
+                }
+                continue;
+            }
+            // jaws against jaws face to face: they clack and you bounce apart - bite it from the side
+            if (swallows && victim != Combat.Relation.PREY && target instanceof CellCreature jawCell
+                    && jawCell.species().look.diet() == Diet.CARNIVORE && Combat.headOn(player, target)) {
+                jawCell.bounceOff(player);
+                if (spikes == 0) continue;
+                float sting = Combat.playerHitShare(Diet.HERBIVORE, spikes, victim); // only the spikes get through
+                if (sting > 0) target.hurt(level.damageSources().playerAttack(player), target.getMaxHealth() * sting);
+                continue;
+            }
 
             if (sips && sipNow) {
                 NEXT_SIP.put(player.getUUID(), now + 20);
