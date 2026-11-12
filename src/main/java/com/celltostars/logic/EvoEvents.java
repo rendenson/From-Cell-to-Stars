@@ -46,9 +46,15 @@ public final class EvoEvents {
             EvoData data = EvoLogic.get(newPlayer);
             EvoLogic.applyAttributes(newPlayer, data);
             EvoLogic.sync(newPlayer, data);
-            if (data.stage() == Stage.CELL && newPlayer.level().dimension() != CellToStars.CELL_LEVEL) {
+            if (data.stage() == Stage.CELL) { // (before, every death sent you back to the middle of the soup)
+                // where the old cell died (in the soup), so the new one hatches far from its killers
+                var death = oldPlayer.getLastDeathLocation()
+                        .filter(pos -> pos.dimension() == CellToStars.CELL_LEVEL).map(pos -> pos.pos());
                 EvoScheduler.later(newPlayer, 5, p -> {
-                    if (EvoLogic.teleportToSoup(p)) {
+                    boolean moved = death.isPresent()
+                            ? EvoLogic.teleportToSoupAwayFrom(p, death.get().getX(), death.get().getZ())
+                            : EvoLogic.teleportToSoup(p);
+                    if (moved) {
                         p.setHealth(p.getMaxHealth());
                         EvoCycle.hatchScene(p, false); // born again from an egg, like in Spore
                     }

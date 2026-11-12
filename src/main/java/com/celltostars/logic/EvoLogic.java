@@ -268,6 +268,21 @@ public final class EvoLogic {
         return true;
     }
 
+    /**
+     * After dying: a new cell is born somewhere else - 400 to 800 blocks from where you died, so whatever
+     * killed you (and its pack) is far away and the area around you is fresh.
+     */
+    public static boolean teleportToSoupAwayFrom(ServerPlayer player, double deathX, double deathZ) {
+        ServerLevel soup = player.server.getLevel(CellToStars.CELL_LEVEL);
+        if (soup == null) return teleportToSoup(player);
+        RandomSource random = soup.getRandom();
+        double angle = random.nextDouble() * Math.PI * 2;
+        double distance = 400 + random.nextDouble() * 400;
+        player.teleportTo(soup, deathX + Math.cos(angle) * distance, PLANE_Y, deathZ + Math.sin(angle) * distance,
+                random.nextFloat() * 360f, 0.0f);
+        return true;
+    }
+
     public static void teleportToOverworld(ServerPlayer player) {
         ServerLevel overworld = player.server.overworld();
         BlockPos spawn = overworld.getSharedSpawnPos();
