@@ -59,6 +59,8 @@ public class CellCreature extends PathfinderMob {
     private int scaredTimer = 0;
     private int angryTimer = 0;      // fights back for a while after being attacked (or a pack mate was)
     private int fleeTicks = 0;       // keeps running for a moment once spooked (no back-and-forth)
+    /** Badly hurt: stays away from the player and eats until it's back above half health. */
+    private boolean retreating = false;
     private CellCreature preyTarget = null; // shared with pack mates of my species
     /** AI cells swim at this share of a player cell's speed with the same number of flagella. */
     private static final double AI_SPEED = 0.8;
@@ -187,8 +189,14 @@ public class CellCreature extends PathfinderMob {
         boolean hurt = super.hurt(source, amount);
         if (hurt && source.getEntity() != null) {
             if (source.getEntity() instanceof Player) {
-                if (species().temperament == Species.Temperament.NEUTRAL) angryTimer = 120; // fights back
-                else scaredTimer = 60;                                                   // runs away for 3 seconds
+                switch (species().temperament) {
+                    // meat eaters and omnivores fight back - until they are badly hurt, then they retreat
+                    case HUNTER, DRIFTER, NEUTRAL -> {
+                        if (getHealth() < getMaxHealth() * 0.3f) retreating = true;
+                        else angryTimer = 120;
+                    }
+                    default -> scaredTimer = 60; // grazers run away for 3 seconds
+                }
                 alertPack();
             }
             // flinch: a short jerk away from whoever hit me
@@ -313,13 +321,18 @@ public class CellCreature extends PathfinderMob {
                 goalSpeed = 0.6;
             }
             case HUNTER -> {
-                boolean weak = getHealth() < getMaxHealth() * 0.3f;
-                boolean afraid = weak || scaredTimer > 0 || (playerDangerous && playerBigger);
-                if (angryTimer > 0 && !playerBigger) {
-                    goal = player.position(); // you hurt one of my pack
+                // one clear mode at a time: retreat (badly hurt) / fight back / avoid a bigger you / hunt
+                if (retreating && getHealth() >= getMaxHealth() * 0.5f) retreating = false; // healed up: back in the game
+                if (retreating) {
+                    angryTimer = 0;
+                    chaseTicks = 0;
+                    if (playerDist < 5 * sense) danger = player.position();   // keep well away from you
+                    else goal = nearestFood(level, true, 4 * playerK);        // and eat to heal
+                } else if (angryTimer > 0 && !playerBigger) {
+                    goal = player.position(); // you hurt me or my pack: fight
                     goalSpeed = 0.9;
-                } else if (afraid && playerDist < 2.0 * sense) {
-                    danger = player.position();
+                } else if (playerDangerous && playerBigger && playerDist < 2.0 * sense) {
+                    danger = player.position(); // you are bigger and can bite: stay away
                     chaseTicks = 0;
                 } else if (!playerBigger && restTicks == 0 && playerDist < 4 * sense) {
                     goal = chase(player.position(), 100, 160); // gives up after ~5 s (Spore: you can get away)
@@ -330,8 +343,11 @@ public class CellCreature extends PathfinderMob {
                 }
             }
             case DRIFTER -> {
+                if (retreating && getHealth() >= getMaxHealth() * 0.5f) retreating = false;
                 // big and lazy: turns towards you slowly and lets you swim into its mouth
-                if (!playerBigger && restTicks == 0 && playerDist < 3 * sense) {
+                if (retreating) {
+                    if (playerDist < 4 * sense) danger = player.position();
+                } else if (!playerBigger && restTicks == 0 && playerDist < 3 * sense) {
                     goal = chase(player.position(), 120, 200);
                     goalSpeed = 0.55;
                 } else if (playerBigger && playerDangerous && playerDist < 2 * sense) {
@@ -340,7 +356,11 @@ public class CellCreature extends PathfinderMob {
                 }
             }
             case NEUTRAL -> {
-                if (angryTimer > 0 && !playerBigger) {
+                if (retreating && getHealth() >= getMaxHealth() * 0.5f) retreating = false;
+                if (retreating) {
+                    if (playerDist < 4 * sense) danger = player.position();
+                    else goal = nearestFood(level, false, 4 * playerK);
+                } else if (angryTimer > 0 && !playerBigger) {
                     goal = player.position(); // you started it
                 } else if (scaredTimer > 0 || (playerDangerous && playerBigger && playerComing && playerDist < 1.3 * sense)) {
                     danger = player.position();
@@ -405,8 +425,8 @@ public class CellCreature extends PathfinderMob {
         double radius = 0.08 * getScale();
 
         boolean wantsToBite = species.bites() && switch (species.temperament) {
-            case HUNTER -> scaredTimer == 0;
-            case DRIFTER -> true;
+            case HUNTER -> !retreating;
+            case DRIFTER -> !retreating;
             case NEUTRAL -> angryTimer > 0;
             default -> false;
         };
