@@ -74,6 +74,24 @@ public final class Combat {
 
     // ---------------- where the front of a cell is ----------------
 
+    /** What a cell has at the front for a head-on clash. */
+    public enum Front { SPIKE, JAW, NONE }
+
+    public static Front frontOf(Diet mouth, int spikes) {
+        if (spikes > 0) return Front.SPIKE;
+        return mouth == Diet.CARNIVORE ? Front.JAW : Front.NONE;
+    }
+
+    /**
+     * Head on, does MY attack get blocked? Spore: spikes colliding - neither hurts; spike against jaws -
+     * the spike hurts, the jaws don't; jaws against jaws - they clack. Filters and the proboscis block nothing.
+     */
+    public static boolean blocked(Front mine, Front theirs) {
+        if (mine == Front.NONE) return false;
+        if (theirs == Front.SPIKE) return true;            // a spike wall stops spikes and jaws alike
+        return mine == Front.JAW && theirs == Front.JAW;   // jaw vs jaw
+    }
+
     /**
      * Are the two cells face to face - each one in front of the other's nose? Two jaws meeting like that
      * clack together and bounce off (Spore): to bite another meat eater you have to get it from the side.

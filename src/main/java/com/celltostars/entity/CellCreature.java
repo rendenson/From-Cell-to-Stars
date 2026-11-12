@@ -20,6 +20,8 @@ import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.core.particles.DustParticleOptions;
+import org.joml.Vector3f;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.entity.Mob;
@@ -66,8 +68,11 @@ public class CellCreature extends PathfinderMob {
     private static final double AI_SPEED = 0.8;
     private int attackCooldown = 0;
     private int stunTicks = 0;       // just got hit: flung back, can't steer
-    private int chaseTicks = 0;      // hunters give up a chase after a while...
-    private int restTicks = 0;       // ...and rest before the next one
+    private int restTicks = 0;       // rests after losing you, before picking a new target
+    /** Locked on to the player: chases only you, ignores other prey (Spore's "growl" moment). */
+    private boolean locked = false;
+    /** Fight stamina: runs down while there's no contact; any bite, clack or sting refills it. */
+    private int stamina = 0;
     private ServerPlayer latchedTo;  // a proboscis is sucking on me
     private int latchTicks = 0;
     private int latchCooldown = 0;   // just broke free: can't be grabbed again for a moment
@@ -136,6 +141,7 @@ public class CellCreature extends PathfinderMob {
     public boolean bounceOff(LivingEntity other) {
         if (bounceCooldown > 0 || !(level() instanceof ServerLevel server)) return false;
         bounceCooldown = 10;
+        combatContact();
         flingFrom(other, 0.25);
         stunTicks = 6;
         other.knockback(0.6, getX() - other.getX(), getZ() - other.getZ());
@@ -193,7 +199,7 @@ public class CellCreature extends PathfinderMob {
                     // meat eaters and omnivores fight back - until they are badly hurt, then they retreat
                     case HUNTER, DRIFTER, NEUTRAL -> {
                         if (getHealth() < getMaxHealth() * 0.3f) retreating = true;
-                        else angryTimer = 120;
+                        else combatContact();
                     }
                     default -> scaredTimer = 60; // grazers run away for 3 seconds
                 }
@@ -324,19 +330,14 @@ public class CellCreature extends PathfinderMob {
                 // one clear mode at a time: retreat (badly hurt) / fight back / avoid a bigger you / hunt
                 if (retreating && getHealth() >= getMaxHealth() * 0.5f) retreating = false; // healed up: back in the game
                 if (retreating) {
-                    angryTimer = 0;
-                    chaseTicks = 0;
+                    unlock(0);
                     if (playerDist < 5 * sense) danger = player.position();   // keep well away from you
                     else goal = nearestFood(level, true, 4 * playerK);        // and eat to heal
-                } else if (angryTimer > 0 && !playerBigger) {
-                    goal = player.position(); // you hurt me or my pack: fight
-                    goalSpeed = 0.9;
+                } else if ((goal = fight(level, player, !playerBigger && (angryTimer > 0 || (restTicks == 0 && playerDist < 4 * sense)),
+                        playerBigger, playerDist, 6 * sense, 200)) != null) {
+                    goalSpeed = 0.85; // locked on to you
                 } else if (playerDangerous && playerBigger && playerDist < 2.0 * sense) {
                     danger = player.position(); // you are bigger and can bite: stay away
-                    chaseTicks = 0;
-                } else if (!playerBigger && restTicks == 0 && playerDist < 4 * sense) {
-                    goal = chase(player.position(), 100, 160); // gives up after ~5 s (Spore: you can get away)
-                    goalSpeed = 0.8;
                 } else {
                     CellCreature prey = nearestPrey(level, 6 * playerK);
                     goal = prey != null ? prey.position() : nearestFood(level, true, 4 * playerK);
@@ -346,10 +347,11 @@ public class CellCreature extends PathfinderMob {
                 if (retreating && getHealth() >= getMaxHealth() * 0.5f) retreating = false;
                 // big and lazy: turns towards you slowly and lets you swim into its mouth
                 if (retreating) {
+                    unlock(0);
                     if (playerDist < 4 * sense) danger = player.position();
-                } else if (!playerBigger && restTicks == 0 && playerDist < 3 * sense) {
-                    goal = chase(player.position(), 120, 200);
-                    goalSpeed = 0.55;
+                } else if ((goal = fight(level, player, !playerBigger && (angryTimer > 0 || (restTicks == 0 && playerDist < 3 * sense)),
+                        playerBigger, playerDist, 4.5 * sense, 160)) != null) {
+                    goalSpeed = 0.55; // slow, but it doesn't let go easily
                 } else if (playerBigger && playerDangerous && playerDist < 2 * sense) {
                     danger = player.position();
                     goalSpeed = 0.6;
@@ -358,10 +360,12 @@ public class CellCreature extends PathfinderMob {
             case NEUTRAL -> {
                 if (retreating && getHealth() >= getMaxHealth() * 0.5f) retreating = false;
                 if (retreating) {
+                    unlock(0);
                     if (playerDist < 4 * sense) danger = player.position();
                     else goal = nearestFood(level, false, 4 * playerK);
-                } else if (angryTimer > 0 && !playerBigger) {
-                    goal = player.position(); // you started it
+                } else if ((goal = fight(level, player, !playerBigger && angryTimer > 0,
+                        playerBigger, playerDist, 5 * sense, 200)) != null) {
+                    goalSpeed = 0.85; // you started it
                 } else if (scaredTimer > 0 || (playerDangerous && playerBigger && playerComing && playerDist < 1.3 * sense)) {
                     danger = player.position();
                 } else {
@@ -387,14 +391,62 @@ public class CellCreature extends PathfinderMob {
         touch(level, species, playerData);
     }
 
-    /** Chasing something, but only for {@code maxTicks}; then a rest of {@code restFor} ticks. */
-    private Vec3 chase(Vec3 target, int maxTicks, int restFor) {
-        if (++chaseTicks > maxTicks) {
-            chaseTicks = 0;
-            restTicks = restFor;
+    /**
+     * The fight with the player. {@code wants}: it would like to attack now. Once locked on it chases only you
+     * until you get {@code leash} away, you outgrow it, or its stamina runs out (no contact for a while).
+     * Returns where to swim, or null when not fighting.
+     */
+    private Vec3 fight(ServerLevel level, ServerPlayer player, boolean wants, boolean playerBigger,
+                       double dist, double leash, int fullStamina) {
+        if (!locked && wants) {
+            locked = true;
+            stamina = fullStamina;
+            growl(level, true);
+        }
+        if (!locked) return null;
+        if (playerBigger || dist > leash || --stamina <= 0) { // you got away / it's worn out
+            unlock(100);
             return null;
         }
-        return target;
+        if (tickCount % 30 == 0) growl(level, false); // still angry: a few sparks now and then
+        return player.position();
+    }
+
+    private void unlock(int rest) {
+        if (locked) restTicks = rest;
+        locked = false;
+        angryTimer = 0;
+    }
+
+    /** Any contact in a fight (a bite either way, a clack, a sting) keeps it going. */
+    public void combatContact() {
+        if (locked) stamina = Math.max(stamina, 200);
+        else if (!retreating && species().temperament != Species.Temperament.PASSIVE
+                && species().temperament != Species.Temperament.SKITTISH) angryTimer = 120;
+    }
+
+    /**
+     * Spore's warning when a predator decides to attack: orange lightning bolts around it (drawn flat, so they
+     * read from the top-down camera) and a growl. {@code big}: the moment it locks on.
+     */
+    private void growl(ServerLevel level, boolean big) {
+        double k = getScale() / 0.3;
+        if (big) level.playSound(null, blockPosition(), SoundEvents.WOLF_GROWL, SoundSource.HOSTILE, 0.7f, 1.7f);
+        DustParticleOptions orange = new DustParticleOptions(new Vector3f(1.0f, 0.55f, 0.05f), (float) Math.min(4.0, 0.7 * k));
+        int bolts = big ? 4 : 2;
+        double y = getY() + getBbHeight() + 0.05 * k;
+        double r0 = getBbWidth() * 0.6;
+        for (int b = 0; b < bolts; b++) {
+            double angle = random.nextDouble() * Math.PI * 2;
+            double cx = Math.cos(angle), cz = Math.sin(angle);   // outwards
+            double px = -cz, pz = cx;                           // sideways, for the zig-zag
+            for (int i = 0; i <= 6; i++) {
+                double out = r0 + i * 0.05 * k;
+                double zig = (i % 2 == 0 ? 1 : -1) * 0.03 * k;
+                level.sendParticles(orange, getX() + cx * out + px * zig, y, getZ() + cz * out + pz * zig, 1, 0, 0, 0, 0);
+            }
+        }
+        if (big) level.sendParticles(ParticleTypes.ELECTRIC_SPARK, getX(), y, getZ(), 6, getBbWidth() * 0.4, 0.01, getBbWidth() * 0.4, 0.05);
     }
 
     private void wander(double speed) {
@@ -427,7 +479,7 @@ public class CellCreature extends PathfinderMob {
         boolean wantsToBite = species.bites() && switch (species.temperament) {
             case HUNTER -> !retreating;
             case DRIFTER -> !retreating;
-            case NEUTRAL -> angryTimer > 0;
+            case NEUTRAL -> locked || angryTimer > 0;
             default -> false;
         };
         if (attackCooldown == 0 && (wantsToBite || species.hasSpikes())) {
@@ -435,18 +487,26 @@ public class CellCreature extends PathfinderMob {
                     p -> EvoLogic.isCell(p) && !EvoCycle.isInEgg(p) && Combat.touches(front, p, radius))) {
                 EvoData victim = EvoLogic.get(player);
                 Combat.Relation rel = Combat.Relation.of(cellTier(), victim.tier());
-                // my jaws against your jaws, face to face: they clack and we bounce apart (only spikes still sting)
-                boolean jawsMeet = species.look.diet() == Diet.CARNIVORE && victim.diet() == Diet.CARNIVORE
-                        && rel != Combat.Relation.EPIC && Combat.headOn(this, player);
-                if (jawsMeet) bounceOff(player);
+                // face to face, Spore's rules: spike vs spike / jaw vs jaw -> clack, nobody is hurt;
+                // spike vs jaw -> only the spike hurts
+                if (rel != Combat.Relation.EPIC && Combat.headOn(this, player)) {
+                    Combat.Front mine = Combat.frontOf(species.look.diet(), species.look.spikes());
+                    Combat.Front yours = Combat.frontOf(victim.diet(), victim.count(Part.SPIKE));
+                    if (Combat.blocked(mine, yours)) {
+                        if (mine == yours) bounceOff(player);
+                        combatContact();
+                        continue;
+                    }
+                }
                 float share = 0;
-                if (wantsToBite && !jawsMeet && rel != Combat.Relation.PREY) share = Combat.aiHitShare(rel); // jaws don't bother with giants
+                if (wantsToBite && rel != Combat.Relation.PREY) share = Combat.aiHitShare(rel); // jaws don't bother with giants
                 if (species.hasSpikes()) share = Math.max(share, Combat.aiHitShare(rel));        // spikes always sting
                 if (share > 0 && player.hurt(level.damageSources().mobAttack(this), player.getMaxHealth() * share)) {
                     if (species.look.diet() == Diet.OMNIVORE && wantsToBite) {
                         EvoLogic.juice(level, player, this); // its proboscis drinks from you
                     }
                     if (wantsToBite) heal(2.0f); // a bite is a meal
+                    combatContact();
                     attackCooldown = 20;
                 }
             }
@@ -456,11 +516,14 @@ public class CellCreature extends PathfinderMob {
             for (CellCreature prey : level.getEntitiesOfClass(CellCreature.class, getBoundingBox().inflate(getBbWidth()),
                     c -> c != this && c.isAlive() && c.species() != species // never my own kind
                             && c.cellTier() <= cellTier() && Combat.touches(front, c, radius))) {
-                if (species.look.diet() == Diet.CARNIVORE && prey.species().look.diet() == Diet.CARNIVORE
-                        && prey.cellTier() == cellTier() && Combat.headOn(this, prey)) {
-                    prey.bounceOff(this); // two equal jaws: clack, nobody gets bitten
-                    attackCooldown = 20;
-                    continue;
+                if (prey.cellTier() == cellTier() && Combat.headOn(this, prey)) {
+                    Combat.Front mine = Combat.frontOf(species.look.diet(), species.look.spikes());
+                    Combat.Front theirs = Combat.frontOf(prey.species().look.diet(), prey.species().look.spikes());
+                    if (Combat.blocked(mine, theirs)) {
+                        if (mine == theirs) prey.bounceOff(this); // clack, nobody gets bitten
+                        attackCooldown = 20;
+                        continue;
+                    }
                 }
                 boolean peer = prey.cellTier() == cellTier();
                 if (prey.hurt(level.damageSources().mobAttack(this), prey.getMaxHealth() * (peer ? 0.5f : 1.0f))) {

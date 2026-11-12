@@ -558,9 +558,9 @@ public final class EvoLogic {
     private static void siphon(ServerLevel level, ServerPlayer player, LivingEntity target) {
         EvoData data = get(player);
         Combat.Relation victim = relationOf(target, data.tier());
-        // one quick grab = one sip of half a proboscis "hit"; then you bounce apart and it can't be grabbed for 3 s.
-        // So a cell your size needs 4 grabs, a small one 2 (your heal and the hold are the proboscis' advantage)
-        float sip = Combat.proboscisShare(victim) * 0.5f;
+        // one quick grab = one proboscis "hit"; then you bounce apart and it can't be grabbed for 3 s.
+        // Spore's damage: a bigger cell needs 6 stabs, one your size 2, a small one dies in 1
+        float sip = Combat.proboscisShare(victim); // Spore's numbers: 1 / 3 / 6 of 6 HP per stab
         if (target instanceof CellCreature cell && !cell.latch(player)) return;
         if (!target.hurt(level.damageSources().playerAttack(player), target.getMaxHealth() * sip)) return;
 
@@ -617,14 +617,15 @@ public final class EvoLogic {
                 }
                 continue;
             }
-            // jaws against jaws face to face: they clack and you bounce apart - bite it from the side
-            if (swallows && victim != Combat.Relation.PREY && target instanceof CellCreature jawCell
-                    && jawCell.species().look.diet() == Diet.CARNIVORE && Combat.headOn(player, target)) {
-                jawCell.bounceOff(player);
-                if (spikes == 0) continue;
-                float sting = Combat.playerHitShare(Diet.HERBIVORE, spikes, victim); // only the spikes get through
-                if (sting > 0) target.hurt(level.damageSources().playerAttack(player), target.getMaxHealth() * sting);
-                continue;
+            // face to face, Spore's rules: spike vs spike and jaw vs jaw clack (nobody is hurt), spike beats jaw.
+            // To get a meat eater or a spiky cell you have to come from the side
+            if (victim != Combat.Relation.PREY && target instanceof CellCreature foe && Combat.headOn(player, target)) {
+                Combat.Front mine = Combat.frontOf(data.diet(), spikes);
+                Combat.Front theirs = Combat.frontOf(foe.species().look.diet(), foe.species().look.spikes());
+                if (Combat.blocked(mine, theirs)) {
+                    if (mine == theirs) foe.bounceOff(player);
+                    continue;
+                }
             }
 
             if (sips && sipNow) {
